@@ -254,6 +254,8 @@ if (-not (Test-Path $TemplateIni)) {
 
 $tpl = Get-Content $TemplateIni -Raw -Encoding UTF8
 
+$silentBuild = if ($SkipBuild) { "0" } else { "1" }
+
 $subs = [ordered]@{
     '%OLD_GAME_PATH%'    = $oldGamePath
     '%NEW_GAME_PATH%'    = $newGamePath
@@ -275,6 +277,7 @@ $subs = [ordered]@{
     '%CURSOR_BTN%'       = $curBtn
     '%CURSOR_FRM%'       = $curFrm
     '%MUSIC_FILE%'       = $musicFile
+    '%SILENT_BUILD%'     = $silentBuild
 }
 
 foreach ($kv in $subs.GetEnumerator()) {

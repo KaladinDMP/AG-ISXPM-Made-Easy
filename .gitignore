@@ -1,0 +1,10 @@
+# Build output — not committed
+Output/
+ISXPMPatch/*.exe
+
+# isxpm.exe writes working data here during generation
+pdata/PatchData/
+pdata/Preprocessed.iss
+
+# Generated settings (rebuilt by make_patch.ps1 each run)
+settings.ini

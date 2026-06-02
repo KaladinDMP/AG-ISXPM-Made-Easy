@@ -1,2 +1,3 @@
 @echo off
-powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0make_patch_gui.ps1"
+cd /d "%~dp0"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "make_patch_gui.ps1"

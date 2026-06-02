@@ -3,14 +3,22 @@
 .SYNOPSIS
     GUI patch builder for AG-ISXPM-Made-Easy.
 .DESCRIPTION
-    Self-contained WinForms GUI — no extra installs. Launch via
-    "Patch Builder.bat" or right-click → Run with PowerShell.
-    Enter the two release name strings, click Build. The script
-    writes settings.ini, runs isxpm.exe, and zips the output.
+    Self-contained WinForms GUI. Enter the two release name strings,
+    click Build Patch. Writes settings.ini, runs isxpm.exe, zips output.
+    Launch via "Patch Builder.bat" or right-click -> Run with PowerShell.
 #>
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
+# Catch startup failures and show them as a message box instead of silently dying
+try {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+} catch {
+    [System.Windows.Forms.MessageBox]::Show(
+        "Failed to load Windows Forms:`n$_`n`nTry running as Administrator or check .NET Framework.",
+        "Startup Error", "OK", "Error")
+    exit 1
+}
+
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
@@ -25,10 +33,9 @@ $ResourceDir = Join-Path $Root "resources"
 $OutputDir   = Join-Path $Root "ISXPMPatch"
 $UploadDir   = Join-Path $Root "Output\Upload"
 
-# ── Shared logic (mirrors make_patch.ps1) ──────────────────────────────────────
+# ── Shared logic ───────────────────────────────────────────────────────────────
 function Read-IniFile([string]$path) {
-    $data = [ordered]@{}
-    $section = "_"
+    $data = [ordered]@{}; $section = "_"
     foreach ($line in (Get-Content $path -Encoding UTF8)) {
         $line = $line.Trim()
         if ($line -match '^\[(.+)\]$') {
@@ -44,11 +51,8 @@ function Read-IniFile([string]$path) {
 
 function Parse-ReleaseName([string]$release) {
     if ($release -match '^(.+?)\s+v(\S+?)(\s+.+)?$') {
-        return @{
-            GameName = $Matches[1].Trim()
-            Build    = $Matches[2].Trim()
-            Tag      = if ($Matches[3]) { $Matches[3].Trim() } else { "" }
-        }
+        return @{ GameName = $Matches[1].Trim(); Build = $Matches[2].Trim()
+                  Tag = if ($Matches[3]) { $Matches[3].Trim() } else { "" } }
     }
     return $null
 }
@@ -68,116 +72,153 @@ function Find-GameFolder([string]$base, [string]$preferred) {
     return $null
 }
 
+# ── Load config ────────────────────────────────────────────────────────────────
+$script:iniData  = $null
+$script:profiles = @()   # only non-DEFAULT sections
+
+if (Test-Path $ConfigIni) {
+    try {
+        $script:iniData  = Read-IniFile $ConfigIni
+        $script:profiles = @($script:iniData.Keys | Where-Object { $_ -notin @('DEFAULT','_') })
+    } catch { }
+}
+
 # ── Theme ──────────────────────────────────────────────────────────────────────
 $cBg      = [System.Drawing.Color]::FromArgb(22,  22,  22)
-$cPanel   = [System.Drawing.Color]::FromArgb(34,  34,  34)
-$cInput   = [System.Drawing.Color]::FromArgb(44,  44,  44)
+$cPanel   = [System.Drawing.Color]::FromArgb(36,  36,  36)
+$cInput   = [System.Drawing.Color]::FromArgb(48,  48,  48)
 $cLog     = [System.Drawing.Color]::FromArgb(12,  12,  12)
 $cAccent  = [System.Drawing.Color]::FromArgb(0,   191, 255)
 $cText    = [System.Drawing.Color]::FromArgb(220, 220, 220)
 $cMuted   = [System.Drawing.Color]::FromArgb(110, 110, 110)
-$cSuccess = [System.Drawing.Color]::FromArgb(50,  220, 110)
-$cWarn    = [System.Drawing.Color]::FromArgb(255, 165,  0)
+$cSuccess = [System.Drawing.Color]::FromArgb(50,  210, 100)
+$cWarn    = [System.Drawing.Color]::FromArgb(255, 165,   0)
 $cError   = [System.Drawing.Color]::FromArgb(255,  75,  75)
 
-$fUI    = New-Object System.Drawing.Font("Segoe UI",    9)
-$fBold  = New-Object System.Drawing.Font("Segoe UI",   10, [System.Drawing.FontStyle]::Bold)
-$fMono  = New-Object System.Drawing.Font("Consolas",    8.5)
-$fHint  = New-Object System.Drawing.Font("Segoe UI",    8,  [System.Drawing.FontStyle]::Italic)
+$fNormal  = New-Object System.Drawing.Font("Segoe UI",  9)
+$fBold    = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$fMono    = New-Object System.Drawing.Font("Consolas",  8.5)
+$fSmall   = New-Object System.Drawing.Font("Segoe UI",  8, [System.Drawing.FontStyle]::Italic)
 
-# ── Form ───────────────────────────────────────────────────────────────────────
+# ── Form — designed at 96 DPI, AutoScaleMode.Font scales it at higher DPI ─────
 $form = New-Object System.Windows.Forms.Form
-$form.Text            = "ARMGDDN Patch Builder"
-$form.ClientSize      = New-Object System.Drawing.Size(660, 520)
-$form.MinimumSize     = New-Object System.Drawing.Size(660, 558)  # chrome + client
-$form.MaximumSize     = $form.MinimumSize
-$form.StartPosition   = "CenterScreen"
-$form.BackColor       = $cBg
-$form.ForeColor       = $cText
-$form.Font            = $fUI
-$form.FormBorderStyle = "FixedSingle"
-$form.MaximizeBox     = $false
-
-# ── Helper: labelled text field row ───────────────────────────────────────────
-function Add-Row {
-    param($parent, [string]$labelText, [int]$y, [int]$labelW = 88)
-    $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text      = $labelText
-    $lbl.Location  = New-Object System.Drawing.Point(14, ($y + 3))
-    $lbl.Size      = New-Object System.Drawing.Size($labelW, 18)
-    $lbl.ForeColor = $cMuted
-    $lbl.Font      = $fUI
-    $parent.Controls.Add($lbl)
-
-    $txt = New-Object System.Windows.Forms.TextBox
-    $txt.Location    = New-Object System.Drawing.Point(($labelW + 18), $y)
-    $txt.Size        = New-Object System.Drawing.Size((600 - $labelW - 4), 24)
-    $txt.BackColor   = $cInput
-    $txt.ForeColor   = $cText
-    $txt.Font        = $fUI
-    $txt.BorderStyle = "FixedSingle"
-    $parent.Controls.Add($txt)
-    return $txt
-}
+$form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
+$form.AutoScaleMode       = [System.Windows.Forms.AutoScaleMode]::Font
+$form.Text                = "ARMGDDN Patch Builder"
+$form.ClientSize          = New-Object System.Drawing.Size(740, 520)
+$form.StartPosition       = "CenterScreen"
+$form.BackColor           = $cBg
+$form.ForeColor           = $cText
+$form.Font                = $fNormal
+$form.FormBorderStyle     = "FixedSingle"
+$form.MaximizeBox         = $false
 
 # ── Input panel ────────────────────────────────────────────────────────────────
+# Height depends on whether we need the profile row
+$needsProfile = $script:profiles.Count -gt 0
+$panelH = if ($needsProfile) { 184 } else { 154 }
+
 $pTop = New-Object System.Windows.Forms.Panel
 $pTop.Location  = New-Object System.Drawing.Point(10, 10)
-$pTop.Size      = New-Object System.Drawing.Size(640, 152)
+$pTop.Size      = New-Object System.Drawing.Size(720, $panelH)
 $pTop.BackColor = $cPanel
 $form.Controls.Add($pTop)
 
+# Title
 $lblHead = New-Object System.Windows.Forms.Label
 $lblHead.Text      = "ARMGDDN Patch Builder"
-$lblHead.Location  = New-Object System.Drawing.Point(14, 12)
-$lblHead.Size      = New-Object System.Drawing.Size(400, 22)
+$lblHead.Location  = New-Object System.Drawing.Point(12, 10)
+$lblHead.Size      = New-Object System.Drawing.Size(500, 22)
 $lblHead.Font      = $fBold
 $lblHead.ForeColor = $cAccent
 $pTop.Controls.Add($lblHead)
 
-# Profile dropdown
-$lblProf = New-Object System.Windows.Forms.Label
-$lblProf.Text      = "Profile:"
-$lblProf.Location  = New-Object System.Drawing.Point(14, 47)
-$lblProf.Size      = New-Object System.Drawing.Size(88, 18)
-$lblProf.ForeColor = $cMuted
-$pTop.Controls.Add($lblProf)
+$rowY = 40  # y of first interactive row
 
-$cbProfile = New-Object System.Windows.Forms.ComboBox
-$cbProfile.Location      = New-Object System.Drawing.Point(106, 44)
-$cbProfile.Size          = New-Object System.Drawing.Size(200, 24)
-$cbProfile.BackColor     = $cInput
-$cbProfile.ForeColor     = $cText
-$cbProfile.DropDownStyle = "DropDownList"
-$cbProfile.FlatStyle     = "Flat"
-$pTop.Controls.Add($cbProfile)
+# Profile row — only shown when game-specific override sections exist
+$script:cbProfile = $null
+if ($needsProfile) {
+    $lblProf = New-Object System.Windows.Forms.Label
+    $lblProf.Text      = "Settings profile:"
+    $lblProf.Location  = New-Object System.Drawing.Point(12, ($rowY + 3))
+    $lblProf.Size      = New-Object System.Drawing.Size(112, 18)
+    $lblProf.ForeColor = $cMuted
+    $pTop.Controls.Add($lblProf)
+
+    $script:cbProfile = New-Object System.Windows.Forms.ComboBox
+    $script:cbProfile.Location      = New-Object System.Drawing.Point(128, $rowY)
+    $script:cbProfile.Size          = New-Object System.Drawing.Size(220, 24)
+    $script:cbProfile.BackColor     = $cInput
+    $script:cbProfile.ForeColor     = $cText
+    $script:cbProfile.DropDownStyle = "DropDownList"
+    $script:cbProfile.FlatStyle     = "Flat"
+    foreach ($p in $script:profiles) { [void]$script:cbProfile.Items.Add($p) }
+    $script:cbProfile.SelectedIndex = 0
+    $pTop.Controls.Add($script:cbProfile)
+
+    $rowY += 32
+}
 
 # Silent build checkbox
 $chkSilent = New-Object System.Windows.Forms.CheckBox
-$chkSilent.Text      = "Silent build  (isxpm auto-starts — uncheck if it doesn't work)"
-$chkSilent.Location  = New-Object System.Drawing.Point(320, 46)
-$chkSilent.Size      = New-Object System.Drawing.Size(310, 20)
+$chkSilent.Text      = "Silent build  —  isxpm starts and builds automatically (uncheck if it opens but does nothing)"
+$chkSilent.Location  = New-Object System.Drawing.Point(12, $rowY)
+$chkSilent.Size      = New-Object System.Drawing.Size(696, 20)
 $chkSilent.Checked   = $true
 $chkSilent.ForeColor = $cMuted
-$chkSilent.Font      = $fUI
+$chkSilent.Font      = $fNormal
 $pTop.Controls.Add($chkSilent)
+$rowY += 30
 
-# Release name fields
-$txtOld = Add-Row $pTop "Old release:" 78
-$txtNew = Add-Row $pTop "New release:" 110
+# Old release row
+$lblOld = New-Object System.Windows.Forms.Label
+$lblOld.Text      = "Old release:"
+$lblOld.Location  = New-Object System.Drawing.Point(12, ($rowY + 4))
+$lblOld.Size      = New-Object System.Drawing.Size(84, 18)
+$lblOld.ForeColor = $cMuted
+$pTop.Controls.Add($lblOld)
 
+$txtOld = New-Object System.Windows.Forms.TextBox
+$txtOld.Location    = New-Object System.Drawing.Point(100, $rowY)
+$txtOld.Size        = New-Object System.Drawing.Size(608, 24)
+$txtOld.BackColor   = $cInput
+$txtOld.ForeColor   = $cText
+$txtOld.BorderStyle = "FixedSingle"
+$pTop.Controls.Add($txtOld)
+$rowY += 32
+
+# New release row
+$lblNew = New-Object System.Windows.Forms.Label
+$lblNew.Text      = "New release:"
+$lblNew.Location  = New-Object System.Drawing.Point(12, ($rowY + 4))
+$lblNew.Size      = New-Object System.Drawing.Size(84, 18)
+$lblNew.ForeColor = $cMuted
+$pTop.Controls.Add($lblNew)
+
+$txtNew = New-Object System.Windows.Forms.TextBox
+$txtNew.Location    = New-Object System.Drawing.Point(100, $rowY)
+$txtNew.Size        = New-Object System.Drawing.Size(608, 24)
+$txtNew.BackColor   = $cInput
+$txtNew.ForeColor   = $cText
+$txtNew.BorderStyle = "FixedSingle"
+$pTop.Controls.Add($txtNew)
+$rowY += 30
+
+# Format hint
 $lblHint = New-Object System.Windows.Forms.Label
-$lblHint.Text      = "Format:  Game Name vBUILD_NUMBER -TAG   e.g.  S.T.A.L.K.E.R. 2 - Heart of Chornobyl v21222340 -ARMGDDN"
-$lblHint.Location  = New-Object System.Drawing.Point(14, 140)
-$lblHint.Size      = New-Object System.Drawing.Size(618, 16)
+$lblHint.Text      = "Format:  Game Name vBUILD_NUMBER -TAG     e.g.  S.T.A.L.K.E.R. 2 - Heart of Chornobyl v21222340 -ARMGDDN"
+$lblHint.Location  = New-Object System.Drawing.Point(12, $rowY)
+$lblHint.Size      = New-Object System.Drawing.Size(696, 16)
 $lblHint.ForeColor = $cMuted
-$lblHint.Font      = $fHint
+$lblHint.Font      = $fSmall
 $pTop.Controls.Add($lblHint)
 
 # ── Log / status area ──────────────────────────────────────────────────────────
+$logTop = 10 + $panelH + 8
+
 $rtbLog = New-Object System.Windows.Forms.RichTextBox
-$rtbLog.Location    = New-Object System.Drawing.Point(10, 172)
-$rtbLog.Size        = New-Object System.Drawing.Size(640, 272)
+$rtbLog.Location    = New-Object System.Drawing.Point(10, $logTop)
+$rtbLog.Size        = New-Object System.Drawing.Size(720, 268)
 $rtbLog.BackColor   = $cLog
 $rtbLog.ForeColor   = $cText
 $rtbLog.Font        = $fMono
@@ -186,19 +227,23 @@ $rtbLog.BorderStyle = "None"
 $rtbLog.ScrollBars  = "Vertical"
 $form.Controls.Add($rtbLog)
 
-# ── Progress bar ──────────────────────────────────────────────────────────────
+# ── Progress bar ───────────────────────────────────────────────────────────────
+$pbarTop = $logTop + 268 + 6
+
 $pbar = New-Object System.Windows.Forms.ProgressBar
-$pbar.Location = New-Object System.Drawing.Point(10, 452)
-$pbar.Size     = New-Object System.Drawing.Size(640, 12)
+$pbar.Location = New-Object System.Drawing.Point(10, $pbarTop)
+$pbar.Size     = New-Object System.Drawing.Size(720, 12)
 $pbar.Style    = "Marquee"
 $pbar.MarqueeAnimationSpeed = 0
 $form.Controls.Add($pbar)
 
-# ── Buttons ───────────────────────────────────────────────────────────────────
+# ── Buttons ────────────────────────────────────────────────────────────────────
+$btnTop = $pbarTop + 12 + 10
+
 $btnBuild = New-Object System.Windows.Forms.Button
 $btnBuild.Text      = "▶  Build Patch"
-$btnBuild.Location  = New-Object System.Drawing.Point(430, 472)
-$btnBuild.Size      = New-Object System.Drawing.Size(110, 36)
+$btnBuild.Location  = New-Object System.Drawing.Point(498, $btnTop)
+$btnBuild.Size      = New-Object System.Drawing.Size(118, 36)
 $btnBuild.BackColor = $cAccent
 $btnBuild.ForeColor = [System.Drawing.Color]::Black
 $btnBuild.Font      = $fBold
@@ -207,21 +252,28 @@ $btnBuild.FlatAppearance.BorderSize = 0
 $form.Controls.Add($btnBuild)
 
 $btnOpen = New-Object System.Windows.Forms.Button
-$btnOpen.Text      = "Open Output"
-$btnOpen.Location  = New-Object System.Drawing.Point(548, 472)
-$btnOpen.Size      = New-Object System.Drawing.Size(102, 36)
+$btnOpen.Text      = "Open Upload Folder"
+$btnOpen.Location  = New-Object System.Drawing.Point(622, $btnTop)
+$btnOpen.Size      = New-Object System.Drawing.Size(108, 36)
 $btnOpen.BackColor = $cPanel
 $btnOpen.ForeColor = $cMuted
-$btnOpen.Font      = $fUI
+$btnOpen.Font      = $fNormal
 $btnOpen.FlatStyle = "Flat"
 $btnOpen.FlatAppearance.BorderSize  = 1
 $btnOpen.FlatAppearance.BorderColor = $cMuted
 $btnOpen.Enabled   = $false
 $form.Controls.Add($btnOpen)
 
+# Tooltip
+$tip = New-Object System.Windows.Forms.ToolTip
+$tip.SetToolTip($btnOpen, "Opens Output\Upload — enabled after a successful build")
+$tip.SetToolTip($chkSilent, "When checked, isxpm.exe runs hidden and auto-starts the build.`nUncheck if silent mode isn't supported by your isxpm version.")
+
+# Adjust form height to fit all controls
+$form.ClientSize = New-Object System.Drawing.Size(740, ($btnTop + 36 + 12))
+
 # ── Log helper ─────────────────────────────────────────────────────────────────
-function Log {
-    param([string]$msg, [System.Drawing.Color]$color)
+function Log([string]$msg, [System.Drawing.Color]$color) {
     if (-not $color) { $color = $cText }
     $rtbLog.SelectionStart  = $rtbLog.TextLength
     $rtbLog.SelectionLength = 0
@@ -232,94 +284,74 @@ function Log {
     [System.Windows.Forms.Application]::DoEvents()
 }
 
-# ── Load profiles on startup ───────────────────────────────────────────────────
-$script:iniData = $null
-
-if (-not (Test-Path $ConfigIni)) {
-    [System.Windows.Forms.MessageBox]::Show(
-        "game_config.ini not found in:`n$Root",
-        "Config Missing", "OK", "Warning")
-} else {
-    try {
-        $script:iniData = Read-IniFile $ConfigIni
-        $profiles = @($script:iniData.Keys | Where-Object { $_ -notin @('DEFAULT','_') })
-        foreach ($p in $profiles) { [void]$cbProfile.Items.Add($p) }
-        if ($cbProfile.Items.Count -gt 0) { $cbProfile.SelectedIndex = 0 }
-    } catch {
-        [System.Windows.Forms.MessageBox]::Show(
-            "Failed to load game_config.ini:`n$_",
-            "Error", "OK", "Error")
-    }
-}
-
-# ── Open Output button ────────────────────────────────────────────────────────
+# ── Open Upload Folder button ──────────────────────────────────────────────────
 $btnOpen.Add_Click({
     if (Test-Path $UploadDir) { Start-Process explorer.exe $UploadDir }
+    else { [System.Windows.Forms.MessageBox]::Show("Upload folder not found yet.`nRun a build first.", "Not Found", "OK", "Information") }
 })
 
-# ── Build button ──────────────────────────────────────────────────────────────
+# ── Build button ───────────────────────────────────────────────────────────────
 $btnBuild.Add_Click({
-    # ── Validate inputs ────────────────────────────────────────────────────
-    if ($cbProfile.SelectedItem -eq $null) {
-        [System.Windows.Forms.MessageBox]::Show("Select a game profile.", "Missing", "OK", "Warning"); return
-    }
+
+    # Validate
     if ([string]::IsNullOrWhiteSpace($txtOld.Text) -or [string]::IsNullOrWhiteSpace($txtNew.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Enter both release name strings.", "Missing", "OK", "Warning"); return
+        [System.Windows.Forms.MessageBox]::Show("Enter both release name strings before building.", "Missing Input", "OK", "Warning")
+        return
     }
 
-    # ── Lock UI ────────────────────────────────────────────────────────────
     $btnBuild.Enabled = $false
     $btnOpen.Enabled  = $false
     $rtbLog.Clear()
     $pbar.MarqueeAnimationSpeed = 30
 
     try {
-        # ── Parse release names ────────────────────────────────────────────
+        # ── Parse release strings ──────────────────────────────────────────
         Log "Parsing release names..." $cMuted
         $old = Parse-ReleaseName $txtOld.Text.Trim()
         $new = Parse-ReleaseName $txtNew.Text.Trim()
-        if (-not $old) { throw "Cannot parse old release name.`nExpected:  Game Name vBUILD -TAG" }
-        if (-not $new) { throw "Cannot parse new release name.`nExpected:  Game Name vBUILD -TAG" }
+        if (-not $old) { throw "Cannot parse old release name.`nExpected format:  Game Name vBUILD_NUMBER -TAG" }
+        if (-not $new) { throw "Cannot parse new release name.`nExpected format:  Game Name vBUILD_NUMBER -TAG" }
 
         $gameName = $old.GameName
         $oldBuild = $old.Build
         $newBuild = $new.Build
-
-        Log "  Game:      $gameName" $cAccent
-        Log "  Old build: $oldBuild"
-        Log "  New build: $newBuild"
+        Log "  Game:       $gameName" $cAccent
+        Log "  Old build:  $oldBuild"
+        Log "  New build:  $newBuild"
 
         # ── Merge config ───────────────────────────────────────────────────
-        $profileKey = $cbProfile.SelectedItem.ToString()
         $cfg = [ordered]@{}
-        if ($script:iniData.Contains('DEFAULT')) {
+        if ($script:iniData -and $script:iniData.Contains('DEFAULT')) {
             foreach ($k in $script:iniData['DEFAULT'].Keys) { $cfg[$k] = $script:iniData['DEFAULT'][$k] }
         }
-        if ($script:iniData.Contains($profileKey)) {
-            foreach ($k in $script:iniData[$profileKey].Keys) { $cfg[$k] = $script:iniData[$profileKey][$k] }
+        if ($script:cbProfile -and $script:cbProfile.SelectedItem) {
+            $pk = $script:cbProfile.SelectedItem.ToString()
+            if ($script:iniData.Contains($pk)) {
+                foreach ($k in $script:iniData[$pk].Keys) { $cfg[$k] = $script:iniData[$pk][$k] }
+            }
         }
 
         # ── Detect game folders ────────────────────────────────────────────
         Log "`nDetecting game folders..." $cMuted
         $oldGamePath = Find-GameFolder $GamesOldDir $gameName
         $newGamePath = Find-GameFolder $GamesNewDir $gameName
-        if (-not $oldGamePath) { throw "No folder found in Games\old\`nInstall the old game version there first." }
-        if (-not $newGamePath) { throw "No folder found in Games\new\`nInstall the new game version there first." }
+        if (-not $oldGamePath) { throw "No folder found in Games\old\`nInstall the old version there first." }
+        if (-not $newGamePath) { throw "No folder found in Games\new\`nInstall the new version there first." }
         Log "  Old: $oldGamePath" $cSuccess
         Log "  New: $newGamePath" $cSuccess
 
-        # ── Build all values ───────────────────────────────────────────────
-        $patchEngine = if ($cfg.Contains('PATCH_ENGINE'))      { $cfg['PATCH_ENGINE']      } else { "1" }
+        # ── Build all substitution values ──────────────────────────────────
+        $patchEngine = if ($cfg.Contains('PATCH_ENGINE'))     { $cfg['PATCH_ENGINE']     } else { "1" }
         $patchExt    = @("xdelta","diff","hdiff")[[int]$patchEngine]
-        $genCores    = if ($cfg.Contains('GENERATING_CORES'))  { $cfg['GENERATING_CORES']  } else { "23" }
-        $appCores    = if ($cfg.Contains('APPLYING_CORES'))    { $cfg['APPLYING_CORES']    } else { "3" }
-        $copyright   = if ($cfg.Contains('COPYRIGHT'))         { $cfg['COPYRIGHT']         } else { "" }
-        $contact     = if ($cfg.Contains('CONTACT'))           { $cfg['CONTACT']           } else { "" }
-        $iconFile    = if ($cfg.Contains('ICON_FILE'))         { $cfg['ICON_FILE']         } else { "icon.ico" }
-        $musicRaw    = if ($cfg.Contains('MUSIC_FILE'))        { $cfg['MUSIC_FILE']        } else { "" }
-        $skinRaw     = if ($cfg.Contains('SKIN'))              { $cfg['SKIN']              } else { "" }
-        $curBtnRaw   = if ($cfg.Contains('CURSOR_BTN'))        { $cfg['CURSOR_BTN']        } else { "" }
-        $curFrmRaw   = if ($cfg.Contains('CURSOR_FRM'))        { $cfg['CURSOR_FRM']        } else { "" }
+        $genCores    = if ($cfg.Contains('GENERATING_CORES')) { $cfg['GENERATING_CORES'] } else { "23" }
+        $appCores    = if ($cfg.Contains('APPLYING_CORES'))   { $cfg['APPLYING_CORES']   } else { "3" }
+        $copyright   = if ($cfg.Contains('COPYRIGHT'))        { $cfg['COPYRIGHT']        } else { "" }
+        $contact     = if ($cfg.Contains('CONTACT'))          { $cfg['CONTACT']          } else { "" }
+        $iconFile    = if ($cfg.Contains('ICON_FILE'))        { $cfg['ICON_FILE']        } else { "icon.ico" }
+        $musicRaw    = if ($cfg.Contains('MUSIC_FILE'))       { $cfg['MUSIC_FILE']       } else { "" }
+        $skinRaw     = if ($cfg.Contains('SKIN'))             { $cfg['SKIN']             } else { "" }
+        $curBtnRaw   = if ($cfg.Contains('CURSOR_BTN'))       { $cfg['CURSOR_BTN']       } else { "" }
+        $curFrmRaw   = if ($cfg.Contains('CURSOR_FRM'))       { $cfg['CURSOR_FRM']       } else { "" }
 
         $patchFilename = "$gameName v$oldBuild-${newBuild}_Update_Patch"
         $uninstallKey  = "${gameName}_is1"
@@ -340,17 +372,19 @@ $btnBuild.Add_Click({
         $musicFile = if ($musicRaw -and (Test-Path $musicRaw -EA SilentlyContinue)) { $musicRaw } else { "Music disabled" }
 
         Log "`nSettings:" $cMuted
-        Log "  Output:  $patchFilename.exe"
-        Log "  Engine:  $(@('XDelta','JDiff','HDiff')[[int]$patchEngine]) ($patchExt)"
-        Log "  Cores:   gen=$genCores  apply=$appCores"
-        Log "  Silent:  $($chkSilent.Checked)"
+        Log "  Output:   $patchFilename.exe"
+        Log "  Engine:   $(@('XDelta','JDiff','HDiff')[[int]$patchEngine]) ($patchExt)"
+        Log "  Cores:    gen=$genCores  apply=$appCores"
+        Log "  Silent:   $($chkSilent.Checked)"
+        if ($iconPath)                    { Log "  Icon:     $iconPath" }
+        if ($skinPath -ne "Skin disabled") { Log "  Skin:     $skinPath" }
+        if ($musicFile -ne "Music disabled") { Log "  Music:    $musicFile" }
 
         # ── Write settings.ini ─────────────────────────────────────────────
         Log "`nWriting settings.ini..." $cMuted
-        if (-not (Test-Path $TemplateIni)) { throw "settings_template.ini not found." }
+        if (-not (Test-Path $TemplateIni)) { throw "settings_template.ini not found at:`n$TemplateIni" }
 
         $tpl = Get-Content $TemplateIni -Raw -Encoding UTF8
-
         $subs = [ordered]@{
             '%OLD_GAME_PATH%'    = $oldGamePath
             '%NEW_GAME_PATH%'    = $newGamePath
@@ -379,7 +413,7 @@ $btnBuild.Add_Click({
         $enc   = [System.Text.Encoding]::Unicode
         $bytes = $enc.GetPreamble() + $enc.GetBytes($tpl)
         [System.IO.File]::WriteAllBytes($SettingsIni, $bytes)
-        Log "  Done: $SettingsIni" $cSuccess
+        Log "  Done." $cSuccess
 
         # ── Launch isxpm.exe ───────────────────────────────────────────────
         if (-not (Test-Path $IsxpmExe)) { throw "isxpm.exe not found at:`n$IsxpmExe" }
@@ -387,49 +421,47 @@ $btnBuild.Add_Click({
 
         if ($chkSilent.Checked) {
             Log "`nRunning isxpm.exe silently..." $cMuted
-            Log "  (if a window opens anyway, build and close it)" $cWarn
+            Log "  (if nothing happens after a minute, uncheck Silent build and retry)" $cWarn
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName         = $IsxpmExe
             $psi.WorkingDirectory = $Root
             $psi.WindowStyle      = [System.Diagnostics.ProcessWindowStyle]::Hidden
             $proc = [System.Diagnostics.Process]::Start($psi)
         } else {
-            Log "`nLaunching isxpm.exe — build the patch then close it." $cWarn
+            Log "`nOpening isxpm.exe — build the patch then close the window." $cWarn
             $proc = Start-Process -FilePath $IsxpmExe -WorkingDirectory $Root -PassThru
         }
 
-        # Wait without blocking the UI
         while (-not $proc.HasExited) {
             Start-Sleep -Milliseconds 400
             [System.Windows.Forms.Application]::DoEvents()
         }
-        Log "  isxpm.exe finished (exit code $($proc.ExitCode))." $cSuccess
+        Log "  isxpm.exe done (exit $($proc.ExitCode))." $cSuccess
 
-        # ── Zip output ────────────────────────────────────────────────────
-        Log "`nPackaging output..." $cMuted
+        # ── Zip output ─────────────────────────────────────────────────────
+        Log "`nPackaging..." $cMuted
         New-Item -ItemType Directory -Force -Path $UploadDir | Out-Null
 
-        $builtExe = Get-ChildItem $OutputDir -Filter "*.exe" -ErrorAction SilentlyContinue |
+        $builtExe = Get-ChildItem $OutputDir -Filter "*.exe" -EA SilentlyContinue |
                     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
         if (-not $builtExe) {
             Log "  No .exe found in $OutputDir" $cWarn
-            Log "  The build may not have completed — check isxpm.exe output." $cWarn
+            Log "  Build may not have completed — try unchecking Silent build." $cWarn
         } else {
             Log "  Found: $($builtExe.Name)" $cSuccess
             $zipPath = Join-Path $UploadDir "$patchFilename.zip"
             Compress-Archive -Path $builtExe.FullName -DestinationPath $zipPath -Force
-            $sizeMB  = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
-            Log "  Zipped: $zipPath ($sizeMB MB)" $cSuccess
+            $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
+            Log "  Created: $zipPath ($sizeMB MB)" $cSuccess
 
-            # Light up the Open Output button
             $btnOpen.BackColor = $cAccent
             $btnOpen.ForeColor = [System.Drawing.Color]::Black
             $btnOpen.FlatAppearance.BorderColor = $cAccent
             $btnOpen.Enabled   = $true
         }
 
-        Log "`n✓ All done!" $cSuccess
+        Log "`n  All done!" $cSuccess
 
     } catch {
         Log "`nERROR: $_" $cError
@@ -440,5 +472,4 @@ $btnBuild.Add_Click({
     }
 })
 
-# ── Show form ─────────────────────────────────────────────────────────────────
 [void]$form.ShowDialog()

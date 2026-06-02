@@ -325,26 +325,61 @@ function Show-BuildPopup {
     $pop.MaximizeBox         = $false
     $pop.MinimizeBox         = $false
 
-    $lbl = New-Object System.Windows.Forms.Label
-    $lbl.Text     = ("isxpm.exe is about to open." + [Environment]::NewLine +
-                     "Verify that all settings look correct, then click Generate to start the build." + [Environment]::NewLine +
-                     [Environment]::NewLine +
-                     "Close the isxpm window when the build finishes to continue.")
-    $lbl.Location = New-Object System.Drawing.Point(16, 16)
-    $lbl.Size     = New-Object System.Drawing.Size(428, 72)
-    $pop.Controls.Add($lbl)
+    # Header bar
+    $pHead = New-Object System.Windows.Forms.Panel
+    $pHead.Location  = New-Object System.Drawing.Point(0, 0)
+    $pHead.Size      = New-Object System.Drawing.Size(480, 42)
+    $pHead.BackColor = $cPanel
+    $pop.Controls.Add($pHead)
+
+    $lblTitle = New-Object System.Windows.Forms.Label
+    $lblTitle.Text      = "isxpm.exe is about to open"
+    $lblTitle.Location  = New-Object System.Drawing.Point(14, 11)
+    $lblTitle.Size      = New-Object System.Drawing.Size(452, 20)
+    $lblTitle.Font      = $fBold
+    $lblTitle.ForeColor = $cAccent
+    $pHead.Controls.Add($lblTitle)
+
+    # Step labels
+    $y = 56
+    $steps = @(
+        @{ text = "1.  Check that the settings in isxpm look correct."; color = $cText },
+        @{ text = "2.  Click  BUILD PATCH  to start generating the patch."; color = $cText },
+        @{ text = "3.  Wait for the build to fully complete."; color = $cText },
+        @{ text = "4.  Close isxpm -- this tool will then package the output."; color = $cText }
+    )
+    foreach ($step in $steps) {
+        $sl = New-Object System.Windows.Forms.Label
+        $sl.Text      = $step.text
+        $sl.Location  = New-Object System.Drawing.Point(20, $y)
+        $sl.Size      = New-Object System.Drawing.Size(440, 18)
+        $sl.ForeColor = $step.color
+        $pop.Controls.Add($sl)
+        $y += 22
+    }
+
+    $y += 6
+
+    $lblWarn = New-Object System.Windows.Forms.Label
+    $lblWarn.Text      = "Do NOT close isxpm early -- the patch files will be incomplete."
+    $lblWarn.Location  = New-Object System.Drawing.Point(20, $y)
+    $lblWarn.Size      = New-Object System.Drawing.Size(440, 18)
+    $lblWarn.ForeColor = $cWarn
+    $pop.Controls.Add($lblWarn)
+    $y += 30
 
     $chkSkip = New-Object System.Windows.Forms.CheckBox
     $chkSkip.Text      = "Don't show this again"
-    $chkSkip.Location  = New-Object System.Drawing.Point(16, 96)
+    $chkSkip.Location  = New-Object System.Drawing.Point(20, $y)
     $chkSkip.Size      = New-Object System.Drawing.Size(200, 20)
     $chkSkip.ForeColor = $cMuted
     $pop.Controls.Add($chkSkip)
+    $y += 36
 
     $btnOk = New-Object System.Windows.Forms.Button
-    $btnOk.Text      = "Continue"
-    $btnOk.Location  = New-Object System.Drawing.Point(254, 132)
-    $btnOk.Size      = New-Object System.Drawing.Size(90, 30)
+    $btnOk.Text      = "Open isxpm"
+    $btnOk.Location  = New-Object System.Drawing.Point(268, $y)
+    $btnOk.Size      = New-Object System.Drawing.Size(100, 32)
     $btnOk.BackColor = $cAccent
     $btnOk.ForeColor = [System.Drawing.Color]::Black
     $btnOk.Font      = $fBold
@@ -354,15 +389,15 @@ function Show-BuildPopup {
 
     $btnAbort = New-Object System.Windows.Forms.Button
     $btnAbort.Text      = "Cancel"
-    $btnAbort.Location  = New-Object System.Drawing.Point(352, 132)
-    $btnAbort.Size      = New-Object System.Drawing.Size(92, 30)
+    $btnAbort.Location  = New-Object System.Drawing.Point(376, $y)
+    $btnAbort.Size      = New-Object System.Drawing.Size(88, 32)
     $btnAbort.BackColor = $cPanel
     $btnAbort.ForeColor = $cMuted
     $btnAbort.FlatStyle = "Flat"
     $btnAbort.FlatAppearance.BorderColor = $cMuted
     $pop.Controls.Add($btnAbort)
 
-    $pop.ClientSize   = New-Object System.Drawing.Size(460, 178)
+    $pop.ClientSize   = New-Object System.Drawing.Size(480, ($y + 32 + 14))
     $pop.AcceptButton = $btnOk
     $pop.CancelButton = $btnAbort
 
@@ -887,7 +922,7 @@ $btnBuild.Add_Click({
         if (-not (Test-Path $IsxpmExe)) { throw "isxpm.exe not found at:`n$IsxpmExe" }
         New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
-        Log "`nOpening isxpm.exe -- verify settings, click Generate, then close when done." $cWarn
+        Log "`nOpening isxpm.exe -- click BUILD PATCH, wait for it to finish, then close." $cWarn
         $proc = Start-Process -FilePath $IsxpmExe -WorkingDirectory $Root -PassThru
 
         while (-not $proc.HasExited) {

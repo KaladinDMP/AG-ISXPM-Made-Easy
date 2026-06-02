@@ -161,7 +161,7 @@ if ($needsProfile) {
 
 # Silent build checkbox
 $chkSilent = New-Object System.Windows.Forms.CheckBox
-$chkSilent.Text      = "Silent build  —  isxpm starts and builds automatically (uncheck if it opens but does nothing)"
+$chkSilent.Text      = "Silent build - isxpm starts and builds automatically (uncheck if it opens but does nothing)"
 $chkSilent.Location  = New-Object System.Drawing.Point(12, $rowY)
 $chkSilent.Size      = New-Object System.Drawing.Size(696, 20)
 $chkSilent.Checked   = $true
@@ -266,7 +266,7 @@ $form.Controls.Add($btnOpen)
 
 # Tooltip
 $tip = New-Object System.Windows.Forms.ToolTip
-$tip.SetToolTip($btnOpen, "Opens Output\Upload — enabled after a successful build")
+$tip.SetToolTip($btnOpen, "Opens Output\Upload - enabled after a successful build")
 $tip.SetToolTip($chkSilent, "When checked, isxpm.exe runs hidden and auto-starts the build.`nUncheck if silent mode isn't supported by your isxpm version.")
 
 # Adjust form height to fit all controls
@@ -428,7 +428,7 @@ $btnBuild.Add_Click({
             $psi.WindowStyle      = [System.Diagnostics.ProcessWindowStyle]::Hidden
             $proc = [System.Diagnostics.Process]::Start($psi)
         } else {
-            Log "`nOpening isxpm.exe — build the patch then close the window." $cWarn
+            Log "`nOpening isxpm.exe - build the patch then close the window." $cWarn
             $proc = Start-Process -FilePath $IsxpmExe -WorkingDirectory $Root -PassThru
         }
 
@@ -447,7 +447,7 @@ $btnBuild.Add_Click({
 
         if (-not $builtExe) {
             Log "  No .exe found in $OutputDir" $cWarn
-            Log "  Build may not have completed — try unchecking Silent build." $cWarn
+            Log "  Build may not have completed - try unchecking Silent build." $cWarn
         } else {
             Log "  Found: $($builtExe.Name)" $cSuccess
             $zipPath = Join-Path $UploadDir "$patchFilename.zip"

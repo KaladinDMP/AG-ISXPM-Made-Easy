@@ -1007,7 +1007,7 @@ $btnBuild.Add_Click({
 })
 
 # ── Startup checks (run before form shown) ────────────────────────────────────
-$dirtyDirs = Get-DirtyDirs
+$dirtyDirs = @(Get-DirtyDirs)
 if ($dirtyDirs.Count -gt 0) {
     $dirtyResult = Show-DirtyDialog $dirtyDirs
     if ($dirtyResult -eq "all")       { try { Clear-WorkDirs -keepGames $false } catch { } }

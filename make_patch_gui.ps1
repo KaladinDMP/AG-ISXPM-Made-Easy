@@ -241,9 +241,9 @@ $form.Controls.Add($pbar)
 $btnTop = $pbarTop + 12 + 10
 
 $btnBuild = New-Object System.Windows.Forms.Button
-$btnBuild.Text      = "▶  Build Patch"
-$btnBuild.Location  = New-Object System.Drawing.Point(498, $btnTop)
-$btnBuild.Size      = New-Object System.Drawing.Size(118, 36)
+$btnBuild.Text      = "Build Patch"
+$btnBuild.Location  = New-Object System.Drawing.Point(506, $btnTop)
+$btnBuild.Size      = New-Object System.Drawing.Size(110, 36)
 $btnBuild.BackColor = $cAccent
 $btnBuild.ForeColor = [System.Drawing.Color]::Black
 $btnBuild.Font      = $fBold
@@ -253,8 +253,8 @@ $form.Controls.Add($btnBuild)
 
 $btnOpen = New-Object System.Windows.Forms.Button
 $btnOpen.Text      = "Open Upload Folder"
-$btnOpen.Location  = New-Object System.Drawing.Point(622, $btnTop)
-$btnOpen.Size      = New-Object System.Drawing.Size(108, 36)
+$btnOpen.Location  = New-Object System.Drawing.Point(624, $btnTop)
+$btnOpen.Size      = New-Object System.Drawing.Size(106, 36)
 $btnOpen.BackColor = $cPanel
 $btnOpen.ForeColor = $cMuted
 $btnOpen.Font      = $fNormal
@@ -264,10 +264,23 @@ $btnOpen.FlatAppearance.BorderColor = $cMuted
 $btnOpen.Enabled   = $false
 $form.Controls.Add($btnOpen)
 
-# Tooltip
+$btnPreview = New-Object System.Windows.Forms.Button
+$btnPreview.Text      = "Preview"
+$btnPreview.Location  = New-Object System.Drawing.Point(376, $btnTop)
+$btnPreview.Size      = New-Object System.Drawing.Size(122, 36)
+$btnPreview.BackColor = $cPanel
+$btnPreview.ForeColor = $cText
+$btnPreview.Font      = $fNormal
+$btnPreview.FlatStyle = "Flat"
+$btnPreview.FlatAppearance.BorderSize  = 1
+$btnPreview.FlatAppearance.BorderColor = $cMuted
+$form.Controls.Add($btnPreview)
+
+# Tooltips
 $tip = New-Object System.Windows.Forms.ToolTip
-$tip.SetToolTip($btnOpen, "Opens Output\Upload - enabled after a successful build")
-$tip.SetToolTip($chkSilent, "When checked, isxpm.exe runs hidden and auto-starts the build.`nUncheck if silent mode isn't supported by your isxpm version.")
+$tip.SetToolTip($btnPreview, "Parse the release names and show what will be built before you commit")
+$tip.SetToolTip($btnOpen,    "Opens Output\Upload - enabled after a successful build")
+$tip.SetToolTip($chkSilent,  "When checked, isxpm.exe runs hidden and auto-starts the build.`nUncheck if silent mode isn't supported by your isxpm version.")
 
 # Adjust form height to fit all controls
 $form.ClientSize = New-Object System.Drawing.Size(740, ($btnTop + 36 + 12))
@@ -283,6 +296,58 @@ function Log([string]$msg, [System.Drawing.Color]$color) {
     $rtbLog.ScrollToCaret()
     [System.Windows.Forms.Application]::DoEvents()
 }
+
+# ── Preview button ────────────────────────────────────────────────────────────
+$btnPreview.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($txtOld.Text) -or [string]::IsNullOrWhiteSpace($txtNew.Text)) {
+        [System.Windows.Forms.MessageBox]::Show("Enter both release name strings first.", "Missing Input", "OK", "Warning")
+        return
+    }
+
+    $old = Parse-ReleaseName $txtOld.Text.Trim()
+    $new = Parse-ReleaseName $txtNew.Text.Trim()
+
+    $rtbLog.Clear()
+
+    if (-not $old) { Log "Cannot parse old release name. Expected:  Game Name vBUILD -TAG" $cError; return }
+    if (-not $new) { Log "Cannot parse new release name. Expected:  Game Name vBUILD -TAG" $cError; return }
+
+    $gameName      = $old.GameName
+    $oldBuild      = $old.Build
+    $newBuild      = $new.Build
+    $patchFilename = "$gameName v$oldBuild-${newBuild}_Update_Patch"
+    $uninstallKey  = "${gameName}_is1"
+    $oldGamePath   = Join-Path $GamesOldDir $gameName
+    $newGamePath   = Join-Path $GamesNewDir $gameName
+
+    Log "Parsed values:" $cAccent
+    Log "  Game name   : $gameName"
+    Log "  Old build   : $oldBuild"
+    Log "  New build   : $newBuild"
+    Log "  Tag         : $($old.Tag)"
+    Log ""
+    Log "Output file:"
+    Log "  $patchFilename.exe" $cSuccess
+    Log ""
+    Log "Registry key:"
+    Log "  SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$uninstallKey"
+    Log ""
+
+    $oldExists = Test-Path $oldGamePath
+    $newExists = Test-Path $newGamePath
+    Log "Game folders:" $cMuted
+    Log "  Old: $oldGamePath" $(if ($oldExists) { $cSuccess } else { $cWarn })
+    if (-not $oldExists) { Log "       ^ NOT FOUND - install the old version to Games\old\" $cWarn }
+    Log "  New: $newGamePath" $(if ($newExists) { $cSuccess } else { $cWarn })
+    if (-not $newExists) { Log "       ^ NOT FOUND - install the new version to Games\new\" $cWarn }
+
+    Log ""
+    if ($oldExists -and $newExists) {
+        Log "Everything looks good. Click Build Patch when ready." $cSuccess
+    } else {
+        Log "Install the missing game folders before building." $cWarn
+    }
+})
 
 # ── Open Upload Folder button ──────────────────────────────────────────────────
 $btnOpen.Add_Click({

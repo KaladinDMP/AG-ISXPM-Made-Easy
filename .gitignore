@@ -8,3 +8,6 @@ pdata/Preprocessed.iss
 
 # Generated settings (rebuilt by make_patch.ps1 each run)
 settings.ini
+
+# Machine-specific settings (7-Zip path, music file) - not committed
+setup.ini

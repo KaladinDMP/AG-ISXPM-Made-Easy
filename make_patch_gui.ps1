@@ -691,12 +691,16 @@ $btnDeleteQuit.Add_Click({
         return
     }
     $res = [System.Windows.Forms.MessageBox]::Show(
-        "Delete all files in:`n  checker\, Games\old\, Games\new\, ISXPMPatch\, xdata\`n`nAre you sure?",
+        "Delete all working files from the last repack?`n  checker\, ISXPMPatch\, xdata\`n`nGames folders will be asked separately.",
         "Delete Repack Files", "YesNo", "Warning")
-    if ($res -eq "Yes") {
-        try { Clear-WorkDirs -keepGames $false } catch { }
-        $form.Close()
-    }
+    if ($res -ne "Yes") { return }
+
+    $delGames = [System.Windows.Forms.MessageBox]::Show(
+        "Also delete Games\old\ and Games\new\?`n`nOnly do this if you no longer need those installs.",
+        "Delete Game Folders?", "YesNo", "Warning")
+
+    try { Clear-WorkDirs -keepGames ($delGames -ne "Yes") } catch { }
+    $form.Close()
 })
 
 $btnRedoSetup.Add_Click({
@@ -1008,9 +1012,12 @@ $btnBuild.Add_Click({
 
 # ── Startup checks (run before form shown) ────────────────────────────────────
 $dirtyDirs = @(Get-DirtyDirs)
-if ($dirtyDirs.Count -gt 0) {
-    $dirtyResult = Show-DirtyDialog $dirtyDirs
-    if ($dirtyResult -eq "all")       { try { Clear-WorkDirs -keepGames $false } catch { } }
+# Only prompt if something OTHER than the Games folders is dirty.
+# Games\old and Games\new being populated is normal (new patch in progress).
+$nonGameDirty = @($dirtyDirs | Where-Object { $_ -ne $GamesOldDir -and $_ -ne $GamesNewDir })
+if ($nonGameDirty.Count -gt 0) {
+    $dirtyResult = Show-DirtyDialog $nonGameDirty
+    if ($dirtyResult -eq "all")           { try { Clear-WorkDirs -keepGames $false } catch { } }
     elseif ($dirtyResult -eq "keepgames") { try { Clear-WorkDirs -keepGames $true  } catch { } }
 }
 
